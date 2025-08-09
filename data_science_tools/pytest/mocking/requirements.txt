@@ -1,0 +1,37 @@
+# Requirements for mocking examples
+# These are commonly needed packages for data science projects with external dependencies
+
+# Core data science libraries
+pandas>=1.3.0
+numpy>=1.20.0
+
+# HTTP requests for API calls
+requests>=2.25.0
+
+# Database connectivity (optional, for real database testing)
+sqlite3  # Built into Python, but listed for documentation
+
+# Additional packages that might be mocked in data science projects
+# Uncomment as needed:
+
+# Cloud storage
+# boto3>=1.20.0  # AWS S3
+# google-cloud-storage>=2.0.0  # Google Cloud Storage
+
+# Database drivers
+# psycopg2>=2.8.0  # PostgreSQL
+# pymongo>=3.12.0  # MongoDB
+# redis>=4.0.0  # Redis
+
+# Machine learning libraries (for mocking model training/inference)
+# scikit-learn>=1.0.0
+# tensorflow>=2.8.0
+# torch>=1.10.0
+
+# API clients
+# openai>=0.27.0  # OpenAI API
+# tweepy>=4.0.0  # Twitter API
+
+# Monitoring and logging
+# wandb>=0.12.0  # Weights & Biases
+# mlflow>=1.20.0  # MLflow

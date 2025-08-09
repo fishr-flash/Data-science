@@ -150,3 +150,6 @@ marimo_notebooks
 *.csv
 *.parquet
 __marimo__/
+
+# Claude Code documentation
+CLAUDE.md
