@@ -20,7 +20,9 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = []
+dev = [
+    "ruff>=0.12.8",
+]
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.
