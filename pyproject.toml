@@ -51,6 +51,9 @@ exclude = [
     "venv",
 ]
 
+# Extend exclusions to skip Jupyter notebooks
+extend-exclude = ["*.ipynb"]
+
 # Same as Black.
 line-length = 88
 
