@@ -5,13 +5,13 @@
 #     "llama-index-program-openai",
 #     "llama-parse",
 #     "python-dotenv",
-#     "rapidfuzz",
+#     "pandas",
+#     "pillow",
 # ]
 # ///
 import os
-from datetime import date
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional, Type
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -20,8 +20,7 @@ from llama_index.llms.openai import OpenAI
 from llama_index.program.openai import OpenAIPydanticProgram
 from llama_parse import LlamaParse
 from PIL import Image
-from pydantic import BaseModel, Field
-from rapidfuzz import fuzz
+from pydantic import BaseModel
 
 
 def configure_settings() -> None:
@@ -59,38 +58,19 @@ def scale_image(image_path: Path, output_dir: Path, scale_factor: int = 3) -> Pa
 	return output_path
 
 
-class ReceiptItem(BaseModel):
-	"""Line item extracted from a receipt."""
-
-	description: str = Field(description="Item name exactly as shown on the receipt")
-	quantity: int = Field(default=1, ge=1, description="Integer quantity of the item")
-	unit_price: Optional[float] = Field(
-		default=None, ge=0, description="Price per unit in the receipt currency"
-	)
-	discount_amount: float = Field(
-		default=0.0, ge=0, description="Discount applied to this line item"
-	)
-
-
-class Receipt(BaseModel):
-	"""Structured receipt fields extracted from OCR."""
-
-	company: str = Field(description="Business or merchant name")
-	purchase_date: Optional[date] = Field(
-		default=None, description="Date in YYYY-MM-DD format"
-	)
-	address: Optional[str] = Field(default=None, description="Address of the business")
-	total: float = Field(description="Final charged amount")
-	items: List[ReceiptItem] = Field(default_factory=list)
-
-
-def extract_documents(paths: List[str], prompt: str, id_column: str) -> List[dict]:
+def extract_documents(
+	paths: List[str],
+	prompt: str,
+	id_column: str,
+	output_cls: Type[BaseModel]
+) -> List[dict]:
 	"""Extract structured data from documents using LlamaParse and LLM.
 
 	Args:
 	    paths: List of document file paths
 	    prompt: Extraction prompt template
 	    id_column: ID column to identify the document
+	    output_cls: Pydantic model class for structured output
 
 	Returns:
 	    List of dictionaries with document_id and extracted data
@@ -108,7 +88,7 @@ def extract_documents(paths: List[str], prompt: str, id_column: str) -> List[dic
 	documents = parser.load_data(paths)
 
 	program = OpenAIPydanticProgram.from_defaults(
-		output_cls=Receipt,
+		output_cls=output_cls,
 		llm=Settings.llm,
 		prompt_template_str=prompt,
 	)
@@ -125,160 +105,116 @@ def extract_documents(paths: List[str], prompt: str, id_column: str) -> List[dic
 	return results
 
 
-def transform_receipt_columns(df: pd.DataFrame) -> pd.DataFrame:
-	"""Apply standard transformations to receipt DataFrame columns.
+def create_extracted_df(
+	records: List[dict],
+	id_column: str,
+	fields: List[str],
+	transform_fn: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None
+) -> pd.DataFrame:
+	"""Create DataFrame from extracted records.
 
-	Transforms:
-	- company: Convert to uppercase
-	- total: Convert to numeric
-	- purchase_date: Convert to date
+	Args:
+	    records: List of extraction results with id and data
+	    id_column: Column name for document IDs
+	    fields: List of field names to extract from the Pydantic model
+	    transform_fn: Optional function to transform the DataFrame
+
+	Returns:
+	    DataFrame with extracted fields
 	"""
-	df = df.copy()
-
-	df["company"] = df["company"].str.upper()
-
-	df["total"] = pd.to_numeric(df["total"], errors="coerce")
-
-	df["purchase_date"] = pd.to_datetime(
-		df["purchase_date"], errors="coerce", dayfirst=True
-	).dt.date
-
-	return df
-
-
-def create_extracted_df(records: List[dict], id_column: str) -> pd.DataFrame:
 	df = pd.DataFrame(
 		[
 			{
 				id_column: record[id_column],
-				"company": record["data"].company,
-				"total": record["data"].total,
-				"purchase_date": record["data"].purchase_date,
+				**{field: getattr(record["data"], field) for field in fields}
 			}
 			for record in records
 		]
 	)
-	return transform_receipt_columns(df)
 
+	if transform_fn:
+		df = transform_fn(df)
 
-def normalize_date(value: str) -> str:
-	value = (value or "").strip()
-	if not value:
-		return value
-	value = value.replace("-", "/")
-	parts = value.split("/")
-	if len(parts[-1]) == 2:
-		parts[-1] = f"20{parts[-1]}"
-	return "/".join(parts)
-
-
-def create_ground_truth_df(label_paths: List[str], id_column: str) -> pd.DataFrame:
-	"""Create ground truth DataFrame from label JSON files."""
-	records = []
-	for path in label_paths:
-		payload = pd.read_json(Path(path), typ="series").to_dict()
-		records.append(
-			{
-				id_column: Path(path).stem,
-				"company": payload.get("company", ""),
-				"total": payload.get("total", ""),
-				"purchase_date": normalize_date(payload.get("date", "")),
-			}
-		)
-
-	df = pd.DataFrame(records)
-	return transform_receipt_columns(df)
-
-
-def fuzzy_match_score(text1: str, text2: str) -> int:
-	"""Calculate fuzzy match score between two strings.
-
-	Args:
-	    text1: First string to compare
-	    text2: Second string to compare
-
-	Returns:
-	    Similarity score between 0 and 100
-	"""
-	return fuzz.token_set_ratio(str(text1), str(text2))
-
-
-def compare_receipts(
-	extracted_df: pd.DataFrame,
-	ground_truth_df: pd.DataFrame,
-	id_column: str,
-	fuzzy_match_cols: List[str],
-	exact_match_cols: List[str],
-	fuzzy_threshold: int = 80,
-) -> pd.DataFrame:
-	"""Compare extracted and ground truth data with explicit column specifications.
-
-	Args:
-	    extracted_df: DataFrame with extracted data
-	    ground_truth_df: DataFrame with ground truth data
-	    id_column: Column to join on
-	    fuzzy_match_cols: Columns to compare using fuzzy matching
-	    exact_match_cols: Columns to compare using exact matching
-	    fuzzy_threshold: Similarity threshold for fuzzy matching (default: 80)
-	"""
-	comparison_df = extracted_df.merge(
-		ground_truth_df,
-		on=id_column,
-		how="inner",
-		suffixes=("_extracted", "_truth"),
-	)
-
-	# Fuzzy matching
-	for col in fuzzy_match_cols:
-		extracted_col = f"{col}_extracted"
-		truth_col = f"{col}_truth"
-		comparison_df[f"{col}_score"] = comparison_df.apply(
-			lambda row, ec=extracted_col, tc=truth_col: fuzzy_match_score(row[ec], row[tc]),
-			axis=1,
-		)
-		comparison_df[f"{col}_match"] = comparison_df[f"{col}_score"] >= fuzzy_threshold
-
-	# Exact matching
-	for col in exact_match_cols:
-		extracted_col = f"{col}_extracted"
-		truth_col = f"{col}_truth"
-		comparison_df[f"{col}_match"] = (
-			comparison_df[extracted_col] == comparison_df[truth_col]
-		)
-
-	return comparison_df
-
-
-def get_mismatch_rows(comparison_df: pd.DataFrame) -> pd.DataFrame:
-	"""Get mismatched rows, excluding match indicator columns."""
-	# Extract match columns and data columns
-	match_columns = [col for col in comparison_df.columns if col.endswith("_match")]
-	data_columns = [col for col in comparison_df.columns if col not in match_columns]
-
-	# Check for rows where not all matches are True
-	has_mismatch = comparison_df[match_columns].all(axis=1).eq(False)
-
-	return comparison_df[has_mismatch][data_columns]
+	return df
 
 
 def main(
-	receipt_paths: List[str],
-	label_paths: List[str],
-	preprocess: bool = True,
-	output_dir: Path = Path("data/SROIE2019/train/img_adjusted"),
-	id_column: str = "receipt_id",
-) -> None:
+	image_paths: List[str],
+	output_cls: Type[BaseModel],
+	prompt: str,
+	id_column: str = "document_id",
+	fields: Optional[List[str]] = None,
+	preprocess: bool = False,
+	output_dir: Optional[Path] = None,
+	scale_factor: int = 3,
+	transform_fn: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None,
+) -> pd.DataFrame:
+	"""Generic document extraction pipeline.
+
+	Args:
+	    image_paths: Paths to images/documents to process
+	    output_cls: Pydantic model class defining the extraction schema
+	    prompt: Extraction prompt template (must include {context_str})
+	    id_column: Column name for document identifiers
+	    fields: List of field names to extract (if None, uses all model fields)
+	    preprocess: Whether to scale/preprocess images
+	    output_dir: Directory for preprocessed images
+	    scale_factor: Image scaling factor if preprocessing
+	    transform_fn: Optional transformation function for DataFrames
+
+	Returns:
+	    DataFrame with extracted data
+	"""
 	configure_settings()
+
+	# Infer fields from model if not provided
+	if fields is None:
+		fields = list(output_cls.model_fields.keys())
 
 	# Preprocess images if requested
 	if preprocess:
-		print("Preprocessing receipt images...")
-		receipt_paths_to_parse = [
-			scale_image(Path(p), output_dir, scale_factor=3) for p in receipt_paths
+		if output_dir is None:
+			raise ValueError("output_dir must be provided when preprocess=True")
+		print("Preprocessing images...")
+		paths_to_parse = [
+			scale_image(Path(p), output_dir, scale_factor=scale_factor)
+			for p in image_paths
 		]
 	else:
-		receipt_paths_to_parse = receipt_paths
+		paths_to_parse = image_paths
 
+	# Extract documents
+	structured_data = extract_documents(paths_to_parse, prompt, id_column, output_cls)
+
+	# Create extracted DataFrame
+	extracted_df = create_extracted_df(structured_data, id_column, fields, transform_fn)
+
+	return extracted_df
+
+
+if __name__ == "__main__":
+	# Example: Receipt extraction
+	from schemas.receipt_schema import Receipt
+
+	def transform_receipt_columns(df: pd.DataFrame) -> pd.DataFrame:
+		"""Apply receipt-specific transformations."""
+		df = df.copy()
+		df["company"] = df["company"].str.upper()
+		df["total"] = pd.to_numeric(df["total"], errors="coerce")
+		df["purchase_date"] = pd.to_datetime(
+			df["purchase_date"], errors="coerce", dayfirst=True
+		).dt.date
+		return df
+
+	# Default paths
+	receipt_dir = Path("data/SROIE2019/train/img")
+	adjusted_receipt_dir = Path("data/SROIE2019/train/img_adjusted")
+
+	# Default number of receipts
+	num_receipts = 10
+	receipt_paths = sorted(receipt_dir.glob("*.jpg"))[:num_receipts]
+
+	# Receipt extraction prompt
 	prompt = """
     You are extracting structured data from a receipt.
     Use the provided text to populate the Receipt model.
@@ -288,37 +224,18 @@ def main(
     {context_str}
     """
 
-	structured_receipts = extract_documents(receipt_paths_to_parse, prompt, id_column)
-
-	extracted_df = create_extracted_df(structured_receipts, id_column)
-	ground_truth_df = create_ground_truth_df(label_paths, id_column)
-
-	comparison_df = compare_receipts(
-		extracted_df,
-		ground_truth_df,
-		id_column,
-		fuzzy_match_cols=["company"],
-		exact_match_cols=["total", "purchase_date"],
-	)
-	mismatch_df = get_mismatch_rows(comparison_df)
-
-	if mismatch_df.empty:
-		print("All receipts matched the ground truth.")
-	else:
-		print("Mismatched receipts:")
-		print(mismatch_df)
-
-
-if __name__ == "__main__":
-	# Default paths
-	receipt_dir = Path("data/SROIE2019/train/img")
-	label_dir = Path("data/SROIE2019/train/entities")
-	adjusted_receipt_dir = Path("data/SROIE2019/train/img_adjusted")
-
-	# Default number of receipts
-	num_receipts = 10
-	receipt_paths = sorted(receipt_dir.glob("*.jpg"))[:num_receipts]
-	label_paths = sorted(label_dir.glob("*.txt"))[:num_receipts]
-
 	# Run the pipeline
-	main(receipt_paths, label_paths, preprocess=True, output_dir=adjusted_receipt_dir)
+	result_df = main(
+		image_paths=receipt_paths,
+		output_cls=Receipt,
+		prompt=prompt,
+		id_column="receipt_id",
+		fields=["company", "total", "purchase_date"],
+		preprocess=True,
+		output_dir=adjusted_receipt_dir,
+		scale_factor=3,
+		transform_fn=transform_receipt_columns,
+	)
+
+	print("\nExtraction complete!")
+	print(result_df)
