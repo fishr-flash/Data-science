@@ -140,7 +140,7 @@ def create_extracted_df(
 	return df
 
 
-def main(
+def extract_structured_data(
 	image_paths: List[str],
 	output_cls: Type[BaseModel],
 	prompt: str,
@@ -151,7 +151,7 @@ def main(
 	scale_factor: int = 3,
 	transform_fn: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None,
 ) -> pd.DataFrame:
-	"""Generic document extraction pipeline.
+	"""Extract structured data from documents using a generic pipeline.
 
 	Args:
 	    image_paths: Paths to images/documents to process

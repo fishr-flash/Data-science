@@ -45,7 +45,7 @@ from typing import Optional
 
 import pandas as pd
 from pydantic import BaseModel, Field
-from document_extraction_pipeline import main
+from document_extraction_pipeline import extract_structured_data
 
 
 # 1. Define your schema
@@ -77,7 +77,7 @@ If a field is missing, return null.
 if __name__ == "__main__":
     invoice_paths = ["invoice1.pdf", "invoice2.pdf"]
 
-    result_df = main(
+    result_df = extract_structured_data(
         image_paths=invoice_paths,
         output_cls=Invoice,
         prompt=INVOICE_PROMPT,
@@ -90,10 +90,10 @@ if __name__ == "__main__":
 
 ## API Reference
 
-### `main()` Function
+### `extract_structured_data()` Function
 
 ```python
-def main(
+def extract_structured_data(
     image_paths: List[str],
     output_cls: Type[BaseModel],
     prompt: str,
@@ -127,7 +127,7 @@ def main(
 ### Basic Extraction
 
 ```python
-from document_extraction_pipeline import main
+from document_extraction_pipeline import extract_structured_data
 from pydantic import BaseModel, Field
 
 class BusinessCard(BaseModel):
@@ -135,7 +135,7 @@ class BusinessCard(BaseModel):
     company: str = Field(description="Company name")
     email: str = Field(description="Email address")
 
-result = main(
+result = extract_structured_data(
     image_paths=["card.jpg"],
     output_cls=BusinessCard,
     prompt="Extract business card info: {context_str}",
@@ -148,7 +148,7 @@ result = main(
 from pathlib import Path
 from extract_receipts_pipeline import Receipt
 
-result = main(
+result = extract_structured_data(
     image_paths=["low_res.jpg"],
     output_cls=Receipt,
     prompt="Extract receipt: {context_str}",
@@ -168,7 +168,7 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     df["email"] = df["email"].str.lower()
     return df
 
-result = main(
+result = extract_structured_data(
     image_paths=["form.pdf"],
     output_cls=FormData,
     prompt="Extract: {context_str}",
@@ -180,7 +180,7 @@ result = main(
 
 To create a new document extractor (like the receipt pipeline):
 
-1. Import the generic `main` function from `document_extraction_pipeline`
+1. Import the generic `extract_structured_data` function from `document_extraction_pipeline`
 2. Define your Pydantic schema(s)
 3. (Optional) Create transformation function
 4. Define extraction prompt

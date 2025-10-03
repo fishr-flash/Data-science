@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import pandas as pd
-from document_extraction_pipeline import main
+from document_extraction_pipeline import extract_structured_data
 from pydantic import BaseModel, Field
 
 
@@ -79,7 +79,7 @@ if __name__ == "__main__":
 	receipt_paths = sorted(receipt_dir.glob("*.jpg"))[:num_receipts]
 
 	# Run the pipeline
-	result_df = main(
+	result_df = extract_structured_data(
 		image_paths=receipt_paths,
 		output_cls=Receipt,
 		prompt=RECEIPT_PROMPT,
