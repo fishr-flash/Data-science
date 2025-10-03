@@ -34,30 +34,39 @@ def configure_settings() -> None:
 	Settings.context_window = 8000
 
 
-def scale_image(image_path: Path, output_dir: Path, scale_factor: int = 3) -> Path:
-	"""Scale up an image using high-quality resampling.
+def process_images(
+	image_paths: List[str],
+	output_dir: Path,
+	transform_image_fn: Callable[[Image.Image], Image.Image]
+) -> List[str]:
+	"""Process images by applying a transformation function.
+
+	Generic infrastructure that loads images, applies transformation, and saves them.
 
 	Args:
-	    image_path: Path to the original image
-	    output_dir: Directory to save the scaled image
-	    scale_factor: Factor to scale up the image (default: 3x)
+	    image_paths: List of paths to images
+	    output_dir: Directory to save processed images
+	    transform_image_fn: Function that takes PIL Image and returns transformed PIL Image
 
 	Returns:
-	    Path to the scaled image
+	    List of paths to processed images
 	"""
-	# Load the image
-	img = Image.open(image_path)
-
-	# Scale up the image using high-quality resampling
-	new_size = (img.width * scale_factor, img.height * scale_factor)
-	img_resized = img.resize(new_size, Image.Resampling.LANCZOS)
-
-	# Save to output directory with same filename
 	output_dir.mkdir(parents=True, exist_ok=True)
-	output_path = output_dir / image_path.name
-	img_resized.save(output_path, quality=95)
+	processed_paths = []
 
-	return output_path
+	for path in image_paths:
+		# Load image
+		img = Image.open(path)
+
+		# Apply transformation
+		img_transformed = transform_image_fn(img)
+
+		# Save transformed image
+		output_path = output_dir / Path(path).name
+		img_transformed.save(output_path, quality=95)
+		processed_paths.append(str(output_path))
+
+	return processed_paths
 
 
 def extract_documents(
@@ -111,7 +120,7 @@ def create_extracted_df(
 	records: List[dict],
 	id_column: str,
 	fields: List[str],
-	transform_fn: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None
+	data_transformer: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None
 ) -> pd.DataFrame:
 	"""Create DataFrame from extracted records.
 
@@ -119,7 +128,7 @@ def create_extracted_df(
 	    records: List of extraction results with id and data
 	    id_column: Column name for document IDs
 	    fields: List of field names to extract from the Pydantic model
-	    transform_fn: Optional function to transform the DataFrame
+	    data_transformer: Optional function to transform the DataFrame
 
 	Returns:
 	    DataFrame with extracted fields
@@ -134,8 +143,8 @@ def create_extracted_df(
 		]
 	)
 
-	if transform_fn:
-		df = transform_fn(df)
+	if data_transformer:
+		df = data_transformer(df)
 
 	return df
 
@@ -146,10 +155,9 @@ def extract_structured_data(
 	prompt: str,
 	id_column: str = "document_id",
 	fields: Optional[List[str]] = None,
-	preprocess: bool = False,
-	output_dir: Optional[Path] = None,
-	scale_factor: int = 3,
-	transform_fn: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None,
+	image_transform_fn: Optional[Callable[[Image.Image], Image.Image]] = None,
+	image_output_dir: Optional[Path] = None,
+	data_transformer: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None,
 ) -> pd.DataFrame:
 	"""Extract structured data from documents using a generic pipeline.
 
@@ -159,10 +167,9 @@ def extract_structured_data(
 	    prompt: Extraction prompt template (must include {context_str})
 	    id_column: Column name for document identifiers
 	    fields: List of field names to extract (if None, uses all model fields)
-	    preprocess: Whether to scale/preprocess images
-	    output_dir: Directory for preprocessed images
-	    scale_factor: Image scaling factor if preprocessing
-	    transform_fn: Optional transformation function for DataFrames
+	    image_transform_fn: Optional function to transform individual images (takes PIL Image, returns PIL Image)
+	    image_output_dir: Directory to save transformed images (required if image_transform_fn provided)
+	    data_transformer: Optional function to transform the extracted DataFrame
 
 	Returns:
 	    DataFrame with extracted data
@@ -173,15 +180,12 @@ def extract_structured_data(
 	if fields is None:
 		fields = list(output_cls.model_fields.keys())
 
-	# Preprocess images if requested
-	if preprocess:
-		if output_dir is None:
-			raise ValueError("output_dir must be provided when preprocess=True")
-		print("Preprocessing images...")
-		paths_to_parse = [
-			scale_image(Path(p), output_dir, scale_factor=scale_factor)
-			for p in image_paths
-		]
+	# Process images if transformation function provided
+	if image_transform_fn:
+		if image_output_dir is None:
+			raise ValueError("image_output_dir must be provided when image_transform_fn is specified")
+		print("Processing images...")
+		paths_to_parse = process_images(image_paths, image_output_dir, image_transform_fn)
 	else:
 		paths_to_parse = image_paths
 
@@ -189,6 +193,6 @@ def extract_structured_data(
 	structured_data = extract_documents(paths_to_parse, prompt, id_column, output_cls)
 
 	# Create extracted DataFrame
-	extracted_df = create_extracted_df(structured_data, id_column, fields, transform_fn)
+	extracted_df = create_extracted_df(structured_data, id_column, fields, data_transformer)
 
 	return extracted_df

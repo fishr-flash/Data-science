@@ -17,6 +17,7 @@ from typing import List, Optional
 
 import pandas as pd
 from document_extraction_pipeline import extract_structured_data
+from PIL import Image
 from pydantic import BaseModel, Field
 
 
@@ -46,9 +47,31 @@ class Receipt(BaseModel):
 	items: List[ReceiptItem] = Field(default_factory=list)
 
 
-# Receipt-specific transformations
-def transform_receipt_columns(df: pd.DataFrame) -> pd.DataFrame:
-	"""Apply receipt-specific transformations."""
+# Receipt-specific image transformation
+def scale_receipt_image(img: Image.Image, scale_factor: int = 3) -> Image.Image:
+	"""Scale up a receipt image for better OCR.
+
+	Args:
+	    img: PIL Image object
+	    scale_factor: Factor to scale up the image (default: 3x)
+
+	Returns:
+	    Transformed PIL Image
+	"""
+	new_size = (img.width * scale_factor, img.height * scale_factor)
+	return img.resize(new_size, Image.Resampling.LANCZOS)
+
+
+# Receipt-specific data transformations
+def transform_receipt_data(df: pd.DataFrame) -> pd.DataFrame:
+	"""Transform extracted receipt data (normalize text, convert types).
+
+	Args:
+	    df: DataFrame with extracted receipt data
+
+	Returns:
+	    Transformed DataFrame
+	"""
 	df = df.copy()
 	df["company"] = df["company"].str.upper()
 	df["total"] = pd.to_numeric(df["total"], errors="coerce")
@@ -78,17 +101,16 @@ if __name__ == "__main__":
 	num_receipts = 10
 	receipt_paths = sorted(receipt_dir.glob("*.jpg"))[:num_receipts]
 
-	# Run the pipeline
+	# Run the pipeline - pass transformation function directly
 	result_df = extract_structured_data(
 		image_paths=receipt_paths,
 		output_cls=Receipt,
 		prompt=RECEIPT_PROMPT,
 		id_column="receipt_id",
 		fields=["company", "total", "purchase_date"],
-		preprocess=True,
-		output_dir=adjusted_receipt_dir,
-		scale_factor=3,
-		transform_fn=transform_receipt_columns,
+		image_transform_fn=scale_receipt_image,
+		image_output_dir=adjusted_receipt_dir,
+		data_transformer=transform_receipt_data,
 	)
 
 	print("\nExtraction complete!")

@@ -56,8 +56,9 @@ class Invoice(BaseModel):
     total_amount: float = Field(description="Total amount")
 
 
-# 2. Optional: Define transformations
+# 2. Optional: Define data transformer
 def transform_invoice_data(df: pd.DataFrame) -> pd.DataFrame:
+    """Transform extracted invoice data."""
     df = df.copy()
     df["vendor_name"] = df["vendor_name"].str.upper()
     df["total_amount"] = pd.to_numeric(df["total_amount"], errors="coerce")
@@ -82,7 +83,7 @@ if __name__ == "__main__":
         output_cls=Invoice,
         prompt=INVOICE_PROMPT,
         id_column="invoice_id",
-        transform_fn=transform_invoice_data,
+        data_transformer=transform_invoice_data,
     )
 
     print(result_df)
@@ -99,10 +100,9 @@ def extract_structured_data(
     prompt: str,
     id_column: str = "document_id",
     fields: Optional[List[str]] = None,
-    preprocess: bool = False,
-    output_dir: Optional[Path] = None,
-    scale_factor: int = 3,
-    transform_fn: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None,
+    image_transform_fn: Optional[Callable[[Image.Image], Image.Image]] = None,
+    image_output_dir: Optional[Path] = None,
+    data_transformer: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None,
 ) -> pd.DataFrame
 ```
 
@@ -114,10 +114,9 @@ def extract_structured_data(
 **Optional Parameters:**
 - `id_column`: Document ID column name (default: "document_id")
 - `fields`: Fields to extract (default: all model fields)
-- `preprocess`: Enable image preprocessing (default: False)
-- `output_dir`: Directory for preprocessed images
-- `scale_factor`: Image scaling factor (default: 3)
-- `transform_fn`: Custom transformation function
+- `image_transform_fn`: Optional function to transform images (takes PIL Image, returns PIL Image)
+- `image_output_dir`: Directory to save transformed images (required if image_transform_fn provided)
+- `data_transformer`: Optional function to transform the extracted DataFrame
 
 **Returns:**
 - `pd.DataFrame`: Extracted data
@@ -142,28 +141,30 @@ result = extract_structured_data(
 )
 ```
 
-### With Image Preprocessing
+### With Image Transformation
 
 ```python
 from pathlib import Path
-from extract_receipts_pipeline import Receipt
+from PIL import Image
+from extract_receipts_pipeline import Receipt, scale_receipt_image
 
 result = extract_structured_data(
     image_paths=["low_res.jpg"],
     output_cls=Receipt,
     prompt="Extract receipt: {context_str}",
-    preprocess=True,
-    output_dir=Path("processed_images"),
-    scale_factor=3,
+    image_transform_fn=scale_receipt_image,  # Simple function reference
+    image_output_dir=Path("processed_images"),
 )
 ```
 
-### With Custom Transformations
+### With Data Transformation
 
 ```python
 import pandas as pd
 
-def clean_data(df: pd.DataFrame) -> pd.DataFrame:
+def transform_form_data(df: pd.DataFrame) -> pd.DataFrame:
+    """Clean and normalize extracted form data."""
+    df = df.copy()
     df["name"] = df["name"].str.title()
     df["email"] = df["email"].str.lower()
     return df
@@ -172,7 +173,7 @@ result = extract_structured_data(
     image_paths=["form.pdf"],
     output_cls=FormData,
     prompt="Extract: {context_str}",
-    transform_fn=clean_data,
+    data_transformer=transform_form_data,
 )
 ```
 
@@ -182,20 +183,36 @@ To create a new document extractor (like the receipt pipeline):
 
 1. Import the generic `extract_structured_data` function from `document_extraction_pipeline`
 2. Define your Pydantic schema(s)
-3. (Optional) Create transformation function
-4. Define extraction prompt
-5. Add `__main__` block with example usage
+3. (Optional) Create `image_transform_fn` - a simple function that transforms one PIL Image
+4. (Optional) Create `data_transformer` function for data transformation
+5. Define extraction prompt
+6. Add `__main__` block with example usage
+
+**Example image transformation:**
+```python
+from PIL import Image
+
+def rotate_and_scale(img: Image.Image) -> Image.Image:
+    """Custom transformation: rotate 90 degrees and scale up."""
+    rotated = img.rotate(90, expand=True)
+    new_size = (rotated.width * 2, rotated.height * 2)
+    return rotated.resize(new_size, Image.Resampling.LANCZOS)
+```
 
 See [extract_receipts_pipeline.py](extract_receipts_pipeline.py) for a complete example.
 
 ## Dependencies
 
-Both files include uv inline script dependencies. Required packages:
+### Generic Pipeline
+Required packages (in `document_extraction_pipeline.py`):
 - llama-index
 - llama-index-program-openai
 - llama-parse
 - python-dotenv
 - pandas
-- pillow
+
+### Receipt Pipeline
+Additional packages (in `extract_receipts_pipeline.py`):
+- pillow (for image preprocessing)
 
 Run with `uv run <script_name>.py` - dependencies will be automatically installed.
