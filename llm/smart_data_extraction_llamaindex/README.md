@@ -1,4 +1,4 @@
-# Generic Document Extraction Pipeline
+# Document Extraction Pipeline
 
 A flexible, schema-driven pipeline for extracting structured data from any type of document or image using LlamaParse and OpenAI.
 
@@ -9,58 +9,149 @@ A flexible, schema-driven pipeline for extracting structured data from any type 
 - **Flexible Transformations**: Apply custom transformation functions to extracted data
 - **Extensible**: Easy to adapt for receipts, invoices, forms, IDs, or any document type
 
+## File Structure
+
+```
+llm/smart_data_extraction_llamaindex/
+├── document_extraction_pipeline.py   # Generic pipeline (reusable)
+├── extract_receipts_pipeline.py      # Receipt-specific (schema + logic + example)
+└── README.md                          # This file
+```
+
 ## Quick Start
 
-### 1. Define Your Schema
+### Option 1: Use the Receipt Pipeline
 
-Create a Pydantic model for your document type:
+Run the ready-to-use receipt extraction pipeline:
+
+```bash
+uv run extract_receipts_pipeline.py
+```
+
+The receipt pipeline includes:
+- `Receipt` and `ReceiptItem` Pydantic schemas
+- Receipt-specific data transformations
+- Pre-configured extraction prompt
+- Example usage in `__main__` block
+
+### Option 2: Create Your Own Pipeline
+
+Import the generic pipeline and create a custom extractor:
 
 ```python
-from pydantic import BaseModel, Field
+from datetime import date
+from pathlib import Path
+from typing import Optional
 
+import pandas as pd
+from pydantic import BaseModel, Field
+from document_extraction_pipeline import main
+
+
+# 1. Define your schema
 class Invoice(BaseModel):
     invoice_number: str = Field(description="Invoice number")
     vendor_name: str = Field(description="Vendor name")
+    invoice_date: Optional[date] = Field(default=None)
     total_amount: float = Field(description="Total amount")
+
+
+# 2. Optional: Define transformations
+def transform_invoice_data(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["vendor_name"] = df["vendor_name"].str.upper()
+    df["total_amount"] = pd.to_numeric(df["total_amount"], errors="coerce")
+    return df
+
+
+# 3. Define extraction prompt
+INVOICE_PROMPT = """
+Extract invoice data from the following document.
+If a field is missing, return null.
+
+{context_str}
+"""
+
+
+# 4. Run extraction
+if __name__ == "__main__":
+    invoice_paths = ["invoice1.pdf", "invoice2.pdf"]
+
+    result_df = main(
+        image_paths=invoice_paths,
+        output_cls=Invoice,
+        prompt=INVOICE_PROMPT,
+        id_column="invoice_id",
+        transform_fn=transform_invoice_data,
+    )
+
+    print(result_df)
 ```
 
-### 2. Run Extraction
+## API Reference
+
+### `main()` Function
 
 ```python
-from extract_receipts_pipeline import main
-
-result_df = main(
-    image_paths=["invoice1.pdf", "invoice2.pdf"],
-    output_cls=Invoice,
-    prompt="Extract invoice data from: {context_str}",
-    id_column="invoice_id",
-)
+def main(
+    image_paths: List[str],
+    output_cls: Type[BaseModel],
+    prompt: str,
+    id_column: str = "document_id",
+    fields: Optional[List[str]] = None,
+    preprocess: bool = False,
+    output_dir: Optional[Path] = None,
+    scale_factor: int = 3,
+    transform_fn: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None,
+) -> pd.DataFrame
 ```
+
+**Required Parameters:**
+- `image_paths`: List of document/image paths
+- `output_cls`: Pydantic model class for extraction
+- `prompt`: Extraction prompt template (must include `{context_str}`)
+
+**Optional Parameters:**
+- `id_column`: Document ID column name (default: "document_id")
+- `fields`: Fields to extract (default: all model fields)
+- `preprocess`: Enable image preprocessing (default: False)
+- `output_dir`: Directory for preprocessed images
+- `scale_factor`: Image scaling factor (default: 3)
+- `transform_fn`: Custom transformation function
+
+**Returns:**
+- `pd.DataFrame`: Extracted data
 
 ## Usage Examples
 
-### Basic Extraction (No Ground Truth)
+### Basic Extraction
 
 ```python
-from schemas.receipt_schema import Receipt
-from extract_receipts_pipeline import main
+from document_extraction_pipeline import main
+from pydantic import BaseModel, Field
+
+class BusinessCard(BaseModel):
+    name: str = Field(description="Person's name")
+    company: str = Field(description="Company name")
+    email: str = Field(description="Email address")
 
 result = main(
-    image_paths=["receipt1.jpg"],
-    output_cls=Receipt,
-    prompt="Extract receipt data: {context_str}",
+    image_paths=["card.jpg"],
+    output_cls=BusinessCard,
+    prompt="Extract business card info: {context_str}",
 )
 ```
 
-### With Preprocessing
+### With Image Preprocessing
 
 ```python
 from pathlib import Path
+from extract_receipts_pipeline import Receipt
 
 result = main(
     image_paths=["low_res.jpg"],
     output_cls=Receipt,
-    prompt="Extract data: {context_str}",
+    prompt="Extract receipt: {context_str}",
     preprocess=True,
     output_dir=Path("processed_images"),
     scale_factor=3,
@@ -72,50 +163,39 @@ result = main(
 ```python
 import pandas as pd
 
-def transform_data(df: pd.DataFrame) -> pd.DataFrame:
-    df["vendor"] = df["vendor"].str.upper()
-    df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
+def clean_data(df: pd.DataFrame) -> pd.DataFrame:
+    df["name"] = df["name"].str.title()
+    df["email"] = df["email"].str.lower()
     return df
 
 result = main(
-    image_paths=["invoice.pdf"],
-    output_cls=Invoice,
+    image_paths=["form.pdf"],
+    output_cls=FormData,
     prompt="Extract: {context_str}",
-    transform_fn=transform_data,
+    transform_fn=clean_data,
 )
 ```
 
-## Parameters
+## Creating New Document Extractors
 
-### Required
-- `image_paths`: List of document/image paths
-- `output_cls`: Pydantic model class for extraction
-- `prompt`: Extraction prompt template (must include `{context_str}`)
+To create a new document extractor (like the receipt pipeline):
 
-### Optional
-- `id_column`: Document ID column name (default: "document_id")
-- `fields`: Fields to extract (default: all model fields)
-- `preprocess`: Enable image preprocessing (default: False)
-- `output_dir`: Directory for preprocessed images
-- `scale_factor`: Image scaling factor (default: 3)
-- `transform_fn`: Custom transformation function
+1. Import the generic `main` function from `document_extraction_pipeline`
+2. Define your Pydantic schema(s)
+3. (Optional) Create transformation function
+4. Define extraction prompt
+5. Add `__main__` block with example usage
 
-## File Structure
+See [extract_receipts_pipeline.py](extract_receipts_pipeline.py) for a complete example.
 
-```
-llm/smart_data_extraction_llamaindex/
-├── extract_receipts_pipeline.py   # Main pipeline
-├── schemas/
-│   ├── __init__.py
-│   └── receipt_schema.py          # Receipt schema example
-├── example_invoice.py             # Invoice extraction example
-└── README.md                      # This file
-```
+## Dependencies
 
-## Custom Schema Examples
+Both files include uv inline script dependencies. Required packages:
+- llama-index
+- llama-index-program-openai
+- llama-parse
+- python-dotenv
+- pandas
+- pillow
 
-See:
-- `schemas/receipt_schema.py` - Receipt extraction
-- `example_invoice.py` - Invoice extraction example
-
-Create your own schemas in the `schemas/` directory!
+Run with `uv run <script_name>.py` - dependencies will be automatically installed.
